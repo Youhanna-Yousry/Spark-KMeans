@@ -8,10 +8,26 @@ import java.util.Arrays;
 import java.util.List;
 
 public class KMeans {
-    // Implement of KMeans with Spark
+
+    private static boolean hasConverged(List<Point> centroids, List<Point> newCentroids, float threshold) {
+        for (int i = 0; i < centroids.size(); i++) {
+            if (centroids.get(i).computeDistance(newCentroids.get(i)) > threshold) {
+                return false;
+            }
+        }
+        return true;
+    }
+
     public static void main(String[] args) {
+        if (args.length != 4) {
+            System.err.println("Usage: KMeans <input file> <output file> <k> <max iterations>");
+            System.exit(1);
+        }
+
         String inputFile = args[0];
         String outputFile = args[1];
+        int k = Integer.parseInt(args[2]);
+        int maxIterations = Integer.parseInt(args[3]);
 
         SparkConf conf = new SparkConf().setMaster("local").setAppName("KMeans");
 
@@ -26,11 +42,17 @@ public class KMeans {
             JavaRDD<Point> points = lines.map(Point::new);
 
             // Select random centroids
-            List<Point> centroids = Randomizer.chooseCentroids(points.collect(), 3);
+            List<Point> centroids = Randomizer.chooseCentroids(points.collect(), k);
 
             boolean converged = false;
+            int iteration = 0;
 
-            do {
+            while (!converged) {
+                if (iteration >= maxIterations) {
+                    System.out.println("Max iterations reached");
+                    break;
+                }
+
                 // Copying centroids to make it effectively final
                 List<Point> tempCentroids = new ArrayList<>(centroids);
 
@@ -43,18 +65,12 @@ public class KMeans {
                 // Scale the centroids by dividing by the count
                 JavaRDD<Point> newCentroids = clusterPoints.map(x -> x._2.scale());
 
-                // Check if the algorithm converged
-                for (int i = 0; i < centroids.size(); i++) {
-                    if (centroids.get(i).computeDistance(newCentroids.collect().get(i)) > 0.01) {
-                        converged = true;
-                        break;
-                    }
-                }
+                converged = hasConverged(centroids, newCentroids.collect(), 1e-6f);
 
                 // update centroids
                 centroids = newCentroids.collect();
-            } while (!converged);
-
+                iteration++;
+            }
 
             // Write output to file
             JavaRDD<String> output = sc.parallelize(centroids).map(Point::toString);

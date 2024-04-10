@@ -4,6 +4,7 @@ import java.util.ArrayList;
 import java.util.List;
 
 public class Point implements java.io.Serializable {
+
     private final List<Float> coordinates;
     private final int count;
 
