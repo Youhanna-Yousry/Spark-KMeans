@@ -63,10 +63,10 @@ public class KMeans {
                 JavaPairRDD<Integer, Point> assignedPoints = points.mapToPair(x -> x.assignPoint(tempCentroids));
 
                 // Aggregate points in each cluster
-                JavaPairRDD<Integer, Point> clusterPoints = assignedPoints.reduceByKey(Point::add);
+                JavaPairRDD<Integer, Point> aggregatedClusterPoints = assignedPoints.reduceByKey(Point::add);
 
                 // Scale the centroids by dividing by the count
-                JavaRDD<Point> newCentroids = clusterPoints.map(x -> x._2.scale());
+                JavaRDD<Point> newCentroids = aggregatedClusterPoints.map(x -> x._2.scale());
 
                 // Check for convergence
                 converged = hasConverged(tempCentroids, newCentroids.collect(), 1e-6f);
