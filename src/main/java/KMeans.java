@@ -1,26 +1,17 @@
+import org.apache.log4j.Logger;
 import org.apache.spark.SparkConf;
 import org.apache.spark.api.java.JavaPairRDD;
 import org.apache.spark.api.java.JavaRDD;
 import org.apache.spark.api.java.JavaSparkContext;
-import org.apache.log4j.Logger;
+import scala.Tuple2;
 
-import java.util.Arrays;
+import java.util.ArrayList;
 import java.util.List;
 
 public class KMeans {
     private static final Logger log = Logger.getLogger(KMeans.class);
 
-    private static boolean hasConverged(List<Point> centroids, List<Point> newCentroids, float threshold) {
-        for (int i = 0; i < centroids.size(); i++) {
-            if (centroids.get(i).computeDistance(newCentroids.get(i)) > threshold) {
-                return false;
-            }
-        }
-        return true;
-    }
-
     public static void main(String[] args) {
-        long startTime = System.currentTimeMillis();
 
         if (args.length != 4) {
             log.info("Usage: KMeans <input file> <output file> <k> <max iterations>");
@@ -32,20 +23,28 @@ public class KMeans {
         int k = Integer.parseInt(args[2]);
         int maxIterations = Integer.parseInt(args[3]);
 
-        SparkConf conf = new SparkConf().setMaster("local").setAppName("KMeans");
+        SparkConf conf = new SparkConf().setMaster("local[*]").setAppName("KMeans");
+
+        long startTime = System.currentTimeMillis();
 
         try (JavaSparkContext sc = new JavaSparkContext(conf)) {
             // Read input file
             JavaRDD<String> input = sc.textFile(inputFile);
 
-            // Split up into lines
-            JavaRDD<String> lines = input.flatMap(x -> Arrays.asList(x.split("\n")).iterator());
-
             // Map each line to point
-            JavaRDD<Point> points = lines.map(Point::new);
+            JavaRDD<Point> points = input.map(Point::new).cache();
 
-            // Select random centroids
-            JavaRDD<Point> centroids = sc.parallelize(points.takeSample(false, k));
+            // Select random points
+            List<Point> selectedPoints = points.takeSample(false, k);
+
+            // Assign index to each centroid
+            List<Tuple2<Integer, Point>> centroidsTuples = new ArrayList<>();
+
+            for (int i = 0; i < k; i++) {
+                centroidsTuples.add(new Tuple2<>(i, selectedPoints.get(i)));
+            }
+
+            JavaPairRDD<Integer, Point> centroids = sc.parallelizePairs(centroidsTuples).sortByKey();
 
             boolean converged = false;
             int iteration = 0;
@@ -57,7 +56,7 @@ public class KMeans {
                 }
 
                 // Copying centroids to make it effectively final
-                List<Point> tempCentroids = centroids.collect();
+                List<Point> tempCentroids = centroids.values().collect();
 
                 // Assign points to clusters
                 JavaPairRDD<Integer, Point> assignedPoints = points.mapToPair(x -> x.assignPoint(tempCentroids));
@@ -66,22 +65,34 @@ public class KMeans {
                 JavaPairRDD<Integer, Point> aggregatedClusterPoints = assignedPoints.reduceByKey(Point::add);
 
                 // Scale the centroids by dividing by the count
-                JavaRDD<Point> newCentroids = aggregatedClusterPoints.map(x -> x._2.scale());
+                JavaPairRDD<Integer, Point> newCentroids = aggregatedClusterPoints
+                        .mapValues(Point::scale)
+                        .sortByKey();
 
                 // Check for convergence
-                converged = hasConverged(tempCentroids, newCentroids.collect(), 1e-6f);
+                converged = newCentroids.join(centroids)
+                        .values()
+                        .map(tuple -> tuple._1().computeDistance(tuple._2()) <= 1e-6)
+                        .reduce((a, b) -> a && b);
 
-                // update centroids
+                // Update centroids
                 centroids = newCentroids;
                 iteration++;
             }
 
             // Write output to file
-            JavaRDD<String> output = centroids.map(Point::toString);
+            JavaRDD<String> output = centroids.mapValues(Point::toString).values();
             output.saveAsTextFile(outputFile);
 
+            // Log centroids
+            log.info("Centroids:");
+            int idx = 0;
+            for (Point centroid : centroids.values().collect()) {
+                log.info("Centroid " + idx++ + ": " + centroid);
+            }
+
             log.info("Converged in " + iteration + " iterations");
-            log.info("Time taken: " + (System.currentTimeMillis() - startTime) / 1000 + " seconds");
+            log.info("Time taken: " + (double) (System.currentTimeMillis() - startTime) / 1000 + " seconds");
         }
     }
 }
